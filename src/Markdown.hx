@@ -4,6 +4,7 @@ import markdown.HtmlRenderer;
 import markdown.InlineParser;
 
 using StringTools;
+using Lambda;
 
 class Markdown {
 	#if sys
@@ -42,10 +43,12 @@ class Markdown {
 			var lines = ~/(\r\n|\r)/g.replace(markdown, '\n').split("\n");
 
 			// parse ref links
+			document.parseFootnotes(lines);
 			document.parseRefLinks(lines);
 
 			// parse ast
-			var blocks = document.parseLines(lines);
+			var parsedInline = document.parseLines(lines);
+			var blocks = document.filterFootnotes(parsedInline);
 			return renderHtml(blocks);
 		} catch (e:Dynamic) {
 			return '<pre>$e</pre>';
@@ -62,14 +65,34 @@ class Markdown {
 **/
 class Document {
 	public var refLinks:Map<String, Link>;
+	public var refFootnotes:Map<String, Footnote>;
 	public var inlineSyntaxes:Array<InlineSyntax>;
 	public var linkResolver:Resolver;
 	public var codeBlockSyntaxes:Map<String, String->String>;
 
 	public function new() {
 		refLinks = new Map();
+		refFootnotes = new Map();
 		codeBlockSyntaxes = new Map();
 		inlineSyntaxes = [];
+	}
+
+	public function parseFootnotes(lines:Array<String>) {
+		var indent = '^[ ]{0,3}';
+		var id = '\\[\\^([^\\]\\s]+)\\]';
+		var footnote = new EReg('$indent$id:\\s+(.+)$', '');
+
+		for (i in 0...lines.length) {
+			if (!footnote.match(lines[i]))
+				continue;
+
+			var id = footnote.matched(1).toLowerCase();
+			var content = footnote.matched(2);
+			var footnoteNumber = refFootnotes.count() + 1;
+			var count = 0;
+
+			refFootnotes.set(id, new Footnote(id, content, footnoteNumber, count));
+		}
 	}
 
 	public function parseRefLinks(lines:Array<String>) {
@@ -78,7 +101,8 @@ class Document {
 		// Where there may whitespace in there, and where the title may be in
 		// single quotes, double quotes, or parentheses.
 		var indent = '^[ ]{0,3}'; // Leading indentation.
-		var id = '\\[([^\\]]+)\\]'; // Reference id in [brackets].
+		// var id = '\\[([^\\]]+)\\]'; // Reference id in [brackets].
+		var id = '\\[(?!\\^)([^\\]]+)\\]'; // Reference id in [brackets].
 		var quote = '"[^"]+"'; // Title in "double quotes".
 		var apos = "'[^']+'"; // Title in 'single quotes'.
 		var paren = "\\([^)]+\\)"; // Title in (parentheses).
@@ -142,6 +166,49 @@ class Document {
 		return blocks;
 	}
 
+	public function filterFootnotes(nodes:Array<Node>):Array<Node> {
+		var footnotes:Array<Node> = [];
+		var blocks:Array<Node> = [];
+
+		// This system is fucking ass! maybe there is a better way to do this...
+		for (node in nodes) {
+			if (Std.isOfType(node, ElementNode)) {
+				var el:ElementNode = cast node;
+				// Finds an item list
+				if (el.tag == "li" && el.attributes.get('id') != null) {
+					var id = el.attributes.get('id');
+					// Makes sure this node is a footnote by comparing whether or not the id of it is in footnotes
+					if (id != null && refFootnotes.exists(id.substring(3))) {
+						footnotes.push(el);
+
+						var footnote = refFootnotes.get(id.substring(3));
+						var children = el.children;
+
+						if (!children.empty()) {
+							var backRef = new ElementNode('a', [new TextNode(' ↩')]);
+							backRef.attributes.set('href', '#fnref-' + footnote.id + '-' + footnote.count);
+
+							var lastItem:ElementNode = cast children[children.length - 1];
+							lastItem.children.push(backRef);
+						}
+					}
+					continue;
+				}
+			}
+			blocks.push(node);
+		}
+
+		if (footnotes.length > 0) {
+			var list = new ElementNode('ol', footnotes);
+			var section = new ElementNode('section', [list]);
+			section.attributes.set('class', 'footnotes');
+			blocks.push(ElementNode.empty('hr'));
+			blocks.push(section);
+		}
+
+		return blocks;
+	}
+
 	/**
 		Takes a string of raw text and processes all inline markdown tags,
 		returning a list of AST nodes. For example, given ``"*this **is** a*
@@ -162,6 +229,20 @@ class Link {
 		this.id = id;
 		this.url = url;
 		this.title = title;
+	}
+}
+
+class Footnote {
+	public var id(default, null):String;
+	public var content(default, null):String;
+	public var number(default, null):Int;
+	public var count:Int;
+
+	public function new(id:String, content:String, number:Int, count:Int) {
+		this.id = id;
+		this.content = content;
+		this.number = number;
+		this.count = count;
 	}
 }
 

@@ -4,6 +4,7 @@ import Markdown;
 import markdown.AST;
 
 using StringTools;
+using Lambda;
 
 /**
 	Maintains the internal state needed to parse a series of lines into blocks
@@ -124,6 +125,11 @@ class BlockSyntax {
 	static var RE_OL = new EReg('^[ ]{0,3}\\d+\\.[ \\t]+(.*)$', '');
 
 	/**
+	 * A line that start with square brackets `[]` followed up `^`, aka a footnote.
+	 */
+	static var RE_FN = new EReg('^(?: {0,3})\\[\\^([^\\]\\s]+)\\]:\\s*(.*)$', '');
+
+	/**
 		Gets the collection of built-in block parsers. To turn a series of lines
 		into blocks, each of these will be tried in turn. Order matters here.
 	**/
@@ -132,7 +138,7 @@ class BlockSyntax {
 	static function get_syntaxes():Array<BlockSyntax> {
 		if (syntaxes == null) {
 			syntaxes = [
-				new EmptyBlockSyntax(), new BlockHtmlSyntax(), new SetextHeaderSyntax(), new HeaderSyntax(), new CodeBlockSyntax(),
+				new EmptyBlockSyntax(), new BlockHtmlSyntax(), new SetextHeaderSyntax(), new HeaderSyntax(), new FootnoteDefSyntax(), new CodeBlockSyntax(),
 				new GitHubCodeBlockSyntax(), new BlockquoteSyntax(), new HorizontalRuleSyntax(), new UnorderedListSyntax(), new OrderedListSyntax(),
 				new TableSyntax(), new ParagraphSyntax()];
 		}
@@ -585,7 +591,8 @@ class ListSyntax extends BlockSyntax {
 				BlockSyntax.RE_HR,
 				BlockSyntax.RE_INDENT,
 				BlockSyntax.RE_UL,
-				BlockSyntax.RE_OL
+				BlockSyntax.RE_OL,
+				BlockSyntax.RE_FN
 			];
 
 			if (!blockItem) {
@@ -718,5 +725,65 @@ class TableSyntax extends BlockSyntax {
 		}
 
 		return new ElementNode('table', [new ElementNode('thead', heads), new ElementNode('tbody', rows)]);
+	}
+}
+
+class FootnoteDefSyntax extends BlockSyntax {
+	override function get_pattern():EReg {
+		return BlockSyntax.RE_FN;
+	}
+
+	override public function parse(parser:BlockParser):Node {
+		pattern.match(parser.current);
+
+		var id = pattern.matched(1);
+		id = id.toLowerCase();
+
+		parser.advance();
+
+		var lines = [pattern.matched(2)];
+		lines = lines.concat(parseChildLines(parser));
+
+		var children = parser.document.parseLines(lines);
+
+		var li = new ElementNode('li', children);
+		li.attributes.set('id', 'fn-$id');
+		return li;
+	}
+
+	var excludePattern = [BlockSyntax.RE_EMPTY];
+
+	override public function parseChildLines(parser:BlockParser):Array<String> {
+		var childLines = [];
+		var shouldBeBlock = false;
+		var syntaxList = BlockSyntax.syntaxes.filter(function(s) {
+			return !excludePattern.contains(s.pattern);
+		});
+
+		while (!parser.isDone) {
+			var line = parser.current;
+			if (BlockSyntax.RE_EMPTY.match(line)) {
+				childLines.push(line);
+				parser.advance();
+				shouldBeBlock = true;
+				continue;
+			} else if (line.startsWith('    ')) {
+				childLines.push(line.substring(4));
+				parser.advance();
+				shouldBeBlock = false;
+			} else if (shouldBeBlock || BlockSyntax.isAtBlockEnd(parser)) {
+				break;
+			} else {
+				childLines.push(line);
+				parser.advance();
+			}
+		}
+		return childLines;
+	}
+
+	function isBlock(syntaxList:Array<BlockSyntax>, line:String):Bool {
+		return syntaxList.exists(function(s) {
+			return s.pattern.match(line);
+		});
 	}
 }
