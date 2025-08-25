@@ -21,11 +21,14 @@ class InlineParser {
 		// Since it is purely for optimization, it can be removed for debugging.
 		// TODO(amouravski): this regex will glom up any custom syntaxes unless
 		// they're at the beginning.
-		new AutolinkSyntaxWithoutBrackets(),
+
 		new TextSyntax(' {2,}\n', '<br />\n'),
-		new TextSyntax('\\s*[A-Za-z0-9]+'),
+		new TextSyntax('\\s*[A-Za-egi-z0-9]+[A-Za-z0-9]*'),
 		// The real syntaxes.
 		new AutolinkSyntax(),
+		new AutolinkSyntaxWithoutBrackets(),
+		// Parse [^footnote] footnotes.
+		new FootnoteRefSyntax(),
 		new LinkSyntax(),
 		new ImgSyntax(),
 		// "*" surrounded by spaces is left alone.
@@ -88,7 +91,8 @@ class InlineParser {
 		}
 
 		// Custom link resolver goes after the generic text syntax.
-		syntaxes.insert(1, new LinkSyntax(document.linkResolver));
+		var index = Lambda.findIndex(syntaxes, s -> s is LinkSyntax);
+		syntaxes.insert(index, new LinkSyntax(document.linkResolver));
 	}
 
 	public function parse():Array<Node> {
@@ -245,7 +249,7 @@ class TextSyntax extends InlineSyntax {
 class AutolinkSyntax extends InlineSyntax {
 	public function new() {
 		// TODO(rnystrom): Make case insensitive.
-		super('<((http|https|ftp)://[^>]*)>');
+		super('<((http|https|ftp)://[^>]+)>');
 	}
 
 	override function onMatch(parser:InlineParser):Bool {
@@ -265,7 +269,7 @@ class AutolinkSyntax extends InlineSyntax {
 class AutolinkSyntaxWithoutBrackets extends InlineSyntax {
 	public function new() {
 		// TODO(rnystrom): Make case insensitive.
-		super('\\b((http|https|ftp)://[^\\s]*)\\b');
+		super('(http|ftp|https):\\/\\/([\\w_-]+(?:(?:\\.[\\w_-]+)+))([\\w.,@?^=%&:\\/~+#-]*[\\w@?^=%&\\/~+#-])');
 	}
 
 	override function tryMatch(parser) {
@@ -273,7 +277,7 @@ class AutolinkSyntaxWithoutBrackets extends InlineSyntax {
 	}
 
 	override function onMatch(parser:InlineParser):Bool {
-		var url = pattern.matched(1);
+		var url = pattern.matched(0);
 
 		var anchor = ElementNode.text('a', url.htmlEscape());
 		anchor.attributes.set('href', url);
@@ -512,6 +516,37 @@ class CodeSyntax extends InlineSyntax {
 
 	override function onMatch(parser:InlineParser):Bool {
 		parser.addNode(ElementNode.text('code', pattern.matched(1).htmlEscape()));
+		return true;
+	}
+}
+
+class FootnoteRefSyntax extends TagSyntax {
+	public function new() {
+		super('\\[\\^([^\\]]+)\\](?!:)');
+	}
+
+	override function onMatch(parser:InlineParser):Bool {
+		var id = pattern.matched(1);
+		id = id.toLowerCase();
+
+		// Look up the footnote
+		var footnote = parser.document.refFootnotes.get(id);
+		// If the footnote is null, skip it
+		if (footnote == null) {
+			parser.advanceBy(pattern.matched(0).length);
+			return false;
+		}
+		// A bit hacky, but it works...
+		footnote.count = footnote.count + 1;
+
+		var link = new ElementNode('a', [new TextNode(Std.string(footnote.number))]);
+		link.attributes.set('href', '#fn-$id');
+		link.attributes.set('id', 'fnref-$id-' + footnote.count);
+
+		var sup = new ElementNode('sup', [link]);
+		sup.attributes.set('class', 'footnote-ref');
+		parser.addNode(sup);
+
 		return true;
 	}
 }
