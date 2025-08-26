@@ -756,9 +756,6 @@ class FootnoteDefSyntax extends BlockSyntax {
 	override public function parseChildLines(parser:BlockParser):Array<String> {
 		var childLines = [];
 		var shouldBeBlock = false;
-		var syntaxList = BlockSyntax.syntaxes.filter(function(s) {
-			return !excludePattern.contains(s.pattern);
-		});
 
 		while (!parser.isDone) {
 			var line = parser.current;
@@ -779,11 +776,5 @@ class FootnoteDefSyntax extends BlockSyntax {
 			}
 		}
 		return childLines;
-	}
-
-	function isBlock(syntaxList:Array<BlockSyntax>, line:String):Bool {
-		return syntaxList.exists(function(s) {
-			return s.pattern.match(line);
-		});
 	}
 }
