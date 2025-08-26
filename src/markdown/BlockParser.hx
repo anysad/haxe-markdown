@@ -748,6 +748,7 @@ class FootnoteDefSyntax extends BlockSyntax {
 
 		var li = new ElementNode('li', children);
 		li.attributes.set('id', 'fn-$id');
+		li.attributes.set('class', 'footnote-def');
 		return li;
 	}
 
